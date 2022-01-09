@@ -1,0 +1,80 @@
+name: Terraform
+
+on:
+  workflow_dispatch:
+    push:
+      branches:
+        - master
+
+jobs:
+  terraform:
+    runs-on: ubuntu-18.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Install Terraform
+        env:
+          TERRAFORM_VERSION: "1.0.2"
+        run: |
+          tf_version=$TERRAFORM_VERSION
+          wget https://releases.hashicorp.com/terraform/"$tf_version"/terraform_"$tf_version"_linux_amd64.zip
+          unzip terraform_"$tf_version"_linux_amd64.zip
+          sudo mv terraform /usr/local/bin/
+
+      - name: Verify Terraform version
+        run: terraform --version
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan
+
+      - name: Terraform Apply
+        id: terraform-apply
+        run: terraform apply -auto-approve
+
+      - name: Terraform Output
+        id: terraform-output
+        run: |
+          terraform output db_host
+          terraform output db_name
+          terraform output db_user
+
+  monitoring:
+    needs: [terraform]
+    runs-on: ubuntu-18.04
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Check version
+        run: aws --version
+
+      - name: Update config for eks cluster
+        run: aws eks --region ${{ secrets.AWS_REGION }} update-kubeconfig --name eks
+        continue-on-error: true
+
+      - name: Monitoring
+        working-directory: ./k8s
+        run: |
+          sed -i -e "s/{{cluster_name}}/eks/;s/{{region_name}}/eu-central-1/" amazon-cloudwatch.yaml | kubectl apply -f amazon-cloudwatch.yaml
+          kubectl apply -f metrics-server.yaml
